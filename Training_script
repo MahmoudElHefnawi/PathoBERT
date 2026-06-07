@@ -1,0 +1,808 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[1]:
+
+import torch.multiprocessing as mp
+#mp.set_sharing_strategy("file_system")
+
+
+import torch
+import torch.nn as nn
+from torch.nn import BCEWithLogitsLoss
+import torch.nn.functional as F
+import psutil, os
+import re
+import numpy as np
+import random
+import torch
+from torch.utils.data import DataLoader, Dataset
+from torch.optim import AdamW
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.cuda.amp import GradScaler, autocast
+import torch.optim as optim
+from transformers import get_cosine_schedule_with_warmup, get_linear_schedule_with_warmup, get_constant_schedule_with_warmup
+from torch.optim.lr_scheduler import StepLR
+import json
+import pickle
+import torch.nn as nn
+import multiprocessing
+import torchmetrics
+import matplotlib
+matplotlib.use('agg') 
+import matplotlib.pyplot as plt
+import torch.distributed as dist
+from torchmetrics import MeanMetric, Accuracy
+from torch.utils.data import Dataset
+from torch.utils.data import DataLoader, DistributedSampler
+import gc
+import torch.multiprocessing as mp
+from multiprocessing import Manager
+import time
+import socket
+import os
+import torch
+from torch.utils.data import DataLoader, Dataset
+from transformers import BertTokenizer, BertForSequenceClassification
+from transformers import AutoTokenizer
+from torch.optim import AdamW
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.cuda.amp import GradScaler, autocast
+import torch.optim as optim
+from transformers import get_linear_schedule_with_warmup
+import json
+import pickle
+from peft import LoraConfig, get_peft_model, PeftModel
+from torchmetrics.classification import AUROC
+
+
+
+
+class Args:
+    epochs = 30
+    patience = 10
+    save_dir = "checkpoints"
+    resume_checkpoint = None
+    train_data_dir = "./"
+    train_label_dir = "./"
+    num_train_chunks = 6
+
+
+def find_free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('', 0))  # bind to an available port
+        return s.getsockname()[1]        
+
+
+# In[ ]:
+
+
+import torch.nn as nn
+
+
+
+# In[ ]:
+# Modify the model to add a dropout layer
+import torch.nn as nn
+
+import torch
+import torch.nn as nn
+
+class IterableChunkDataset(torch.utils.data.IterableDataset):
+    """
+    Iterable dataset for pre-tokenized data with correct DDP sharding.
+    Each rank sees exactly the same number of samples.
+    """
+    def __init__(
+        self,
+        input_ids_path,
+        attention_mask_path,
+        labels_path,
+        shuffle=False,
+        rank=0,
+        world_size=1
+    ):
+        self.input_ids_path = input_ids_path
+        self.attention_mask_path = attention_mask_path
+        self.labels_path = labels_path
+        self.shuffle = shuffle
+        self.rank = rank
+        self.world_size = world_size
+        self.epoch = 0
+
+    def set_epoch(self, epoch):
+        self.epoch = epoch
+
+    def __iter__(self):
+        import numpy as np
+        from torch.utils.data import get_worker_info
+
+        # --- 🔹 Memory-mapped loading ---
+        input_ids = np.load(self.input_ids_path, mmap_mode="r")
+        attention_mask = np.load(self.attention_mask_path, mmap_mode="r")
+        labels = np.load(self.labels_path, mmap_mode="r")
+
+        dataset_len = len(labels)
+
+        # --- 🔹 DDP-safe truncation ---
+        dataset_len = (dataset_len // self.world_size) * self.world_size
+        per_rank = dataset_len // self.world_size
+
+        rank_start = self.rank * per_rank
+        rank_end = rank_start + per_rank
+
+        # --- 🔹 Worker-level split (if num_workers > 0) ---
+        worker_info = get_worker_info()
+        if worker_info is not None:
+            num_workers = worker_info.num_workers
+            worker_id = worker_info.id
+            per_worker = (rank_end - rank_start) // num_workers
+            start = rank_start + worker_id * per_worker
+            end = start + per_worker
+        else:
+            start, end = rank_start, rank_end
+
+        indices = np.arange(start, end)
+
+        # --- 🔹 Deterministic shuffling ---
+        if self.shuffle:
+            rng = np.random.default_rng(self.epoch + self.rank * 1000)
+            rng.shuffle(indices)
+
+        # --- 🔹 Yield pre-tokenized tensors ---
+        for i in indices:
+            yield {
+                "input_ids": torch.from_numpy(input_ids[i]).long(),
+                "attention_mask": torch.from_numpy(attention_mask[i]).long(),
+                "labels": torch.tensor(labels[i], dtype=torch.float32),
+            }
+
+
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from transformers import AutoModel, BertModel
+import torch
+from torch.utils.data import DataLoader, Dataset
+from transformers import get_scheduler
+from transformers import BertTokenizer, BertForSequenceClassification
+import torch.nn as nn
+from peft import LoraConfig, get_peft_model, PeftModel
+from transformers import get_cosine_schedule_with_warmup, get_linear_schedule_with_warmup, get_constant_schedule_with_warmup
+base_model = BertForSequenceClassification.from_pretrained("zhihan1996/DNA_bert_6", num_labels=2)
+from peft import LoraConfig, get_peft_model, TaskType
+from torch.nn import BCEWithLogitsLoss
+import math
+from torch.utils.data import DataLoader, Dataset
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, get_linear_schedule_with_warmup
+
+
+class MCBAM(nn.Module):
+    def __init__(self, channels, reduction=16, kernel_size=7):
+        super().__init__()
+
+        # Channel attention
+        self.avg_pool = nn.AdaptiveAvgPool1d(1)
+        self.max_pool = nn.AdaptiveMaxPool1d(1)
+
+        self.fc = nn.Sequential(
+            nn.Conv1d(channels, channels // reduction, 1, bias=False),
+            nn.ReLU(),
+            nn.Conv1d(channels // reduction, channels, 1, bias=False)
+        )
+
+        # Spatial attention
+        self.spatial = nn.Sequential(nn.Conv1d(2, 1, kernel_size, padding=kernel_size // 2), nn.BatchNorm1d(1))
+
+
+    def forward(self, x):
+        # Channel attention
+        ca = self.fc(self.avg_pool(x)) + self.fc(self.max_pool(x))
+        x = x * torch.sigmoid(ca)
+
+        # Spatial attention
+        avg = torch.mean(x, dim=1, keepdim=True)
+        mx, _ = torch.max(x, dim=1, keepdim=True)
+        sa = torch.cat([avg, mx], dim=1)
+        x = x * torch.sigmoid(self.spatial(sa))
+
+        return x
+        
+class MSCA(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+
+        self.conv3 = nn.Conv1d(in_channels, out_channels, 3, padding=1)
+        self.conv5 = nn.Conv1d(in_channels, out_channels, 5, padding=2)
+        self.conv7 = nn.Conv1d(in_channels, out_channels, 7, padding=3)
+
+        self.attention = nn.Sequential(
+            nn.AdaptiveAvgPool1d(1),
+            nn.Conv1d(out_channels * 3, out_channels // 2, 1),
+            nn.ReLU(),
+            nn.Conv1d(out_channels // 2, out_channels * 3, 1),
+            nn.Sigmoid()
+        )
+
+        self.project = nn.Conv1d(out_channels * 3, out_channels, 1)
+
+    def forward(self, x):
+        f3 = self.conv3(x)
+        f5 = self.conv5(x)
+        f7 = self.conv7(x)
+
+        feats = torch.cat([f3, f5, f7], dim=1)
+        attn = self.attention(feats)
+        feats = feats * attn
+
+        return self.project(feats)
+
+def load_dnabert_with_lora(
+    model_name="zhihan1996/DNA_bert_6",
+    r=16,
+    alpha=32,
+    dropout=0.05
+):
+    base_model = BertModel.from_pretrained(model_name)
+
+    # Freeze base BERT
+    for p in base_model.parameters():
+        p.requires_grad = False
+
+    lora_config = LoraConfig(
+        r=r,
+        lora_alpha=alpha,
+        lora_dropout=dropout,
+        bias="none",
+        target_modules=["query", "key", "value"]
+    )
+
+    model = get_peft_model(base_model, lora_config)
+    model.print_trainable_parameters()
+
+    return model
+
+class DNABERT_CNN_MCBAM_MSCA(nn.Module):
+    def __init__(
+        self,
+        cnn_channels=256,
+        msca_channels=256,
+        num_classes=1,
+        dropout=0.3
+    ):
+        super().__init__()
+
+        self.bert = load_dnabert_with_lora()
+        hidden_size = self.bert.config.hidden_size
+
+        self.cnn = nn.Sequential(
+            nn.Conv1d(hidden_size, cnn_channels, 7, padding=3),
+            nn.BatchNorm1d(cnn_channels),
+            nn.GELU()
+        )
+
+        self.mcbam = MCBAM(cnn_channels)
+        self.msca = MSCA(cnn_channels, msca_channels)
+
+        self.pool = nn.AdaptiveAvgPool1d(1)
+        self.head = nn.Sequential(
+            nn.Dropout(dropout),
+            nn.Linear(msca_channels, num_classes)
+        )
+
+    def forward(self, input_ids, attention_mask):
+        x = self.bert(
+            input_ids=input_ids,
+            attention_mask=attention_mask
+        ).last_hidden_state
+        x = x[:, 1:-1, :]
+        x = x.transpose(1, 2)
+        x = self.cnn(x)
+        x = self.mcbam(x)
+        x = self.msca(x)
+        x = self.pool(x).squeeze(-1)
+
+        return self.head(x)
+
+
+# In[ ]:
+
+def plot_history(history):
+    epochs = range(1, len(history["train_loss"]) + 1)
+
+    plt.figure(figsize=(12,5))
+
+    # Loss
+    plt.subplot(1,2,1)
+    plt.plot(epochs, history["train_loss"], label="Train Loss")
+    plt.plot(epochs, history["val_loss"], label="Val Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Loss over Epochs")
+    plt.legend()
+
+    # Accuracy
+    plt.subplot(1,2,2)
+    plt.plot(epochs, history["train_acc"], label="Train Acc")
+    plt.plot(epochs, history["val_acc"], label="Val Acc")
+    plt.xlabel("Epoch")
+    plt.ylabel("Accuracy")
+    plt.title("Accuracy over Epochs")
+    plt.legend()
+
+    
+    plt.savefig('training_plot.png')
+    plt.close()
+
+
+
+# In[ ]:
+
+
+# Initialize distributed process group  
+import os
+import torch
+import torch.distributed as dist
+import socket
+
+def find_free_port():
+    """Finds a free port on localhost."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('', 0))
+        return s.getsockname()[1]
+
+
+# Cleans up the process group after training ends.
+def cleanup():
+    dist.destroy_process_group()
+
+def worker_init_fn(worker_id):
+    # Seed each worker deterministically
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+    
+def get_latest_checkpoint(save_dir):
+    os.makedirs(save_dir, exist_ok=True)
+    checkpoint_files = os.listdir(save_dir)
+    print(f"🔎 Files in {save_dir}: {checkpoint_files}")  # DEBUG
+
+    checkpoint_files = [f for f in checkpoint_files if f.endswith('.pt')]
+    print(f"🧹 PT files: {checkpoint_files}")  # DEBUG
+
+    # ✅ Match "checkpoint_epoch_<number>.pt"
+    checkpoint_files = [f for f in checkpoint_files if re.match(r'checkpoint_epoch_\d+\.pt', f)]
+    print(f"✅ Matching checkpoints: {checkpoint_files}")  # DEBUG
+
+    if not checkpoint_files:
+        return None
+
+    checkpoint_files.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))  # still good
+    return os.path.join(save_dir, checkpoint_files[-1])
+
+def validate(model, batch_size, device, world_size, rank, num_workers):  
+    model.eval()
+    criterion = BCEWithLogitsLoss()
+    val_loss_metric = MeanMetric(sync_on_compute=True).to(device)
+    val_acc_metric = Accuracy(task="binary", sync_on_compute=True).to(device)
+
+
+    # Build val dataset and sampler using provided rank and num_workers
+    val_dataset = IterableChunkDataset(
+    input_ids_path=f"./tokenized_val_npy/input_ids_val.npy", 
+    attention_mask_path=f"./tokenized_val_npy/attention_mask_val.npy", 
+    labels_path=f"./tokenized_val_npy/labels_val.npy"
+    shuffle=False,
+    rank=rank,
+    world_size=world_size
+)
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size,
+                                num_workers=num_workers, persistent_workers=False,
+                                worker_init_fn=worker_init_fn)
+
+    with torch.no_grad():
+        val_loss_metric.reset()
+        val_acc_metric.reset()
+
+        for batch in val_dataloader:
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+
+            labels = batch['labels'].float().to(device).view(-1)
+
+            logits = model(input_ids=input_ids, attention_mask=attention_mask).view(-1)
+            loss = criterion(logits, labels)
+
+            probs = torch.sigmoid(logits)
+            val_loss_metric.update(loss.detach())
+            val_acc_metric.update(probs, labels)
+
+
+        # cleanup
+        del val_dataloader, val_dataset
+        torch.cuda.empty_cache()
+        gc.collect()
+    
+    return val_loss_metric.compute().item(), val_acc_metric.compute().item()
+
+    
+# For saving the best model
+
+
+
+# In[ ]:
+# In[ ]:
+total_samples = 0
+train_data_dir = "./"
+for i in range(2):
+    file_path = os.path.join(train_data_dir, f"X_chunk_{i}.npy")
+    X = np.load(file_path, mmap_mode="r")  # memory-safe loading
+    total_samples += X.shape[0]
+
+print(f"✅ Total training samples = {total_samples}")
+
+# Training function
+def train(args):
+    rank = args.rank
+    local_rank = args.local_rank
+    world_size = args.world_size
+
+    # Set seeds for reproducibility
+    torch.manual_seed(42)
+    torch.cuda.manual_seed_all(42)
+    np.random.seed(42)
+    random.seed(42)
+    torch.backends.cudnn.deterministic = False
+    torch.backends.cudnn.benchmark = True
+ 
+    #torch.cuda.set_device(rank)
+    torch.cuda.set_device(local_rank)
+    device = torch.device("cuda", local_rank)
+
+
+    epochs = args.epochs
+    patience = args.patience
+    save_dir = args.save_dir
+    resume_checkpoint = args.resume_checkpoint
+    num_train_chunks = args.num_train_chunks
+
+    
+
+    # Load model and move to device
+
+
+    model = DNABERT_CNN_MCBAM_MSCA().to(device)
+    #model = model.to(args.local_rank)
+    
+     # ✅ DDP wrapping
+    model = DDP(
+        model,
+        device_ids=[local_rank],
+        output_device=local_rank,
+    )
+
+    print(f"[Rank {args.rank}] 🚀 DDP ready on GPU {[args.local_rank]}") 
+
+
+    # Initialize optimizer, loss function, and mixed-precision scaler
+
+    criterion = BCEWithLogitsLoss()
+    optimizer = AdamW(model.parameters(), lr=3e-4, weight_decay = 0.01)
+
+
+    
+    # Gradient scaler for mixed-precision training to maintain numeric stability and speed up training
+    #scaler = GradScaler()
+    
+    # Early stopping variables
+    
+    start_epoch = 0
+
+    best_val_loss = float("inf")
+    epochs_without_improvement = 0
+    
+    # Set the number of data loader workers:
+    # We take the minimum of 4 or the number of CPUs available per GPU process (total CPUs divided by world size).
+    # This balances parallel data loading without overwhelming the CPU resources.
+    num_workers = min(2, multiprocessing.cpu_count() // world_size) 
+    
+    # Calculate batch size and steps per epoch
+    batch_size = 256
+
+    steps_per_epoch = total_samples // (batch_size * world_size)
+
+    
+
+    
+    # Resume training if a checkpoint is provided
+    if resume_checkpoint:
+        checkpoint = torch.load(resume_checkpoint, map_location=device)
+        model.module.load_state_dict(checkpoint["model_state"], strict=False)
+        optimizer.load_state_dict(checkpoint["optimizer_state"])
+
+        start_epoch = checkpoint["epoch"] + 1
+        
+
+        # Only rank 0 loads actual values for broadcasting
+        if rank == 0:
+            best_val_loss = checkpoint.get("best_val_loss", best_val_loss)
+
+            epochs_without_improvement = checkpoint.get("epochs_without_improvement", epochs_without_improvement)
+        else:
+
+            best_val_loss = 0.0
+            epochs_without_improvement = 0
+        
+
+        # Broadcast to all ranks
+        best_val_loss_tensor = torch.tensor(best_val_loss, device=device)
+        epochs_tensor = torch.tensor(epochs_without_improvement, dtype=torch.int, device=device)
+        dist.broadcast(best_val_loss_tensor, src=0)
+        dist.broadcast(epochs_tensor, src=0)
+        best_val_loss = best_val_loss_tensor.item()
+        epochs_without_improvement = epochs_tensor.item()
+
+        # 👉 Load history if it exists in checkpoint
+        if "history" in checkpoint:
+            history = checkpoint["history"]
+        else:
+            history = {"train_loss": [], "train_acc": [], "val_loss": [], "val_acc": []}
+    
+                    
+        print(f"Resuming training from epoch {start_epoch}")
+    else:
+        start_epoch = 0
+        history = {"train_loss": [], "train_acc": [], "val_loss": [], "val_acc": []}
+
+    
+   
+# Create directory for saving checkpoints
+    if rank == 0 and not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+
+    # Initialize loss and accuracy metrics once
+    train_loss_metric = MeanMetric(sync_on_compute=True).to(device)
+    train_acc_metric = Accuracy(task="binary", sync_on_compute=True).to(device)
+
+
+   
+    
+    
+    try:
+        for epoch in range(start_epoch, epochs):
+            print(f"\n👈 Epoch {epoch + 1}/{epochs}")
+            # Print GPU memory usage at the START of the epoch
+            print(f"[Rank {rank}] 🧠 GPU memory at start of epoch - allocated: {torch.cuda.memory_allocated(device)/1e9:.2f} GB, reserved: {torch.cuda.memory_reserved(device)/1e9:.2f} GB")
+
+            model.train()
+            start_time = time.time() 
+            train_loss_metric.reset()
+            train_acc_metric.reset()
+
+
+            for idx in range(args.num_train_chunks):
+                print(f"\n🔄 Processing Chunk {idx + 1}")
+
+                # Load encoded sequences and labels for the chunk
+                train_dataset = IterableChunkDataset(input_ids_path=f"./tokenized_chunks_npy/input_ids_chunk_{idx}.npy", attention_mask_path=f"./tokenized_chunks_npy/attention_mask_chunk_{idx}.npy",labels_path=f"./tokenized_chunks_npy/labels_chunk_{idx}.npy",shuffle=True,rank=rank,world_size=world_size)
+
+                #if rank == 0:
+                    #print(f"[Rank {rank}] Dataset shard loaded: "
+                    #f"chunk {idx}, total samples {len(np.load(f'y_chunk_{idx}.npy'))}, "
+                    #f"processing {train_dataset.rank}/{train_dataset.world_size}")
+
+
+                train_dataset.set_epoch(epoch)
+                
+                # ✅ Log RAM usage after loading each chunk
+                process = psutil.Process(os.getpid())
+                ram_usage_gb = process.memory_info().rss / 1e9
+                print(f"[Rank {rank}] 💾 CPU RAM usage after loading chunk {idx + 1}: {ram_usage_gb:.2f} GB")
+
+                
+                # Distributed sampler for DDP to partition data correctly among GPUs
+                train_dataloader = DataLoader(train_dataset, batch_size=batch_size, num_workers=num_workers,
+                                              worker_init_fn=worker_init_fn, persistent_workers=False,
+                                              pin_memory=True if device.type == "cuda" else False,
+                                              prefetch_factor=2)  # Optional: tune based on workload
+
+
+        
+                batch_count = 0
+                running_loss = 0.0
+                correct_preds = 0
+                total_preds = 0
+                
+                for batch in train_dataloader:
+                    optimizer.zero_grad(set_to_none=True) 
+                    input_ids = batch['input_ids'].to(device)
+                    attention_mask = batch['attention_mask'].to(device)
+                    labels = batch['labels'].float().to(device).view(-1)             
+                    print(f"[Rank {rank}] 🧠 After moving batch to GPU - allocated: {torch.cuda.memory_allocated(device)/1e9:.2f} GB, reserved: {torch.cuda.memory_reserved(device)/1e9:.2f} GB")
+                    
+
+                    logits = model(input_ids=input_ids, attention_mask=attention_mask).view(-1)
+
+                    loss = criterion(logits, labels)                 
+                    
+                    print(f"[Rank {rank}] 🧠 After forward pass - allocated: {torch.cuda.memory_allocated(device)/1e9:.2f} GB, reserved: {torch.cuda.memory_reserved(device)/1e9:.2f} GB")
+                    
+                    loss.backward()
+                    print(f"[Rank {rank}] 🧠 After backward pass - allocated: {torch.cuda.memory_allocated(device)/1e9:.2f} GB, reserved: {torch.cuda.memory_reserved(device)/1e9:.2f} GB")
+                    
+                    optimizer.step()
+                    
+                    
+                    batch_count += 1
+                    running_loss += loss.item()
+
+                    
+                    probs = torch.sigmoid(logits)  # [B]
+
+                    # ✅ Convert probabilities -> binary predictions
+                    preds = (probs > 0.5).long()   # [B]
+
+                    correct_preds += (preds == labels.long()).sum().item()
+                    total_preds += labels.size(0)
+
+                    # Update metrics
+                    train_loss_metric.update(loss)
+                    train_acc_metric.update(probs, labels)
+
+                    
+
+
+
+
+                         
+                print(f"Chunk {idx + 1} loss: {running_loss / batch_count} | Accuracy: {correct_preds / total_preds}")                      
+                # 🧹 Cleanup to release memory from the current chunk
+                del train_dataloader, train_dataset
+                del batch,logits,loss, probs
+                torch.cuda.empty_cache()
+                gc.collect()
+
+            
+            # Sync and compute epoch-level metrics
+            epoch_train_loss = train_loss_metric.compute()
+            epoch_train_acc = train_acc_metric.compute()
+
+
+           
+            # Validation
+            
+            if dist.is_initialized():
+                dist.barrier()
+            val_loss, val_acc = validate(model, batch_size, device, world_size, rank, num_workers)
+            
+            print(f"\n🔄 Rank {rank} - Epoch: {epoch + 1} | Train Loss {epoch_train_loss:.4f}, Train Accuracy {epoch_train_acc:.4f} | Valid loss: {val_loss:.4f}, Valid acc: {val_acc:.4f}")
+
+            
+            elapsed_time = (time.time() - start_time) / 60
+            with open('elapsed_time.pkl', 'wb') as f:
+                pickle.dump(elapsed_time, f)
+            if rank == 0:
+                print(f"✅ Epoch {epoch + 1} completed in {elapsed_time:.2f} min")
+                
+            # Save history 
+            history["val_loss"].append(val_loss)
+            history["val_acc"].append(val_acc)
+
+            
+            history["train_loss"].append(epoch_train_loss.item())
+            history["train_acc"].append(epoch_train_acc.item()) 
+
+
+            # Print GPU memory usage at the END of the epoch
+            print(f"[Rank {rank}] 🧠 GPU memory at start of epoch - allocated: {torch.cuda.memory_allocated(device)/1e9:.2f} GB, reserved: {torch.cuda.memory_reserved(device)/1e9:.2f} GB")
+
+
+            # Only rank 0 will save the data to avoid redundancy
+            if rank == 0:
+                with open('learning_rates.pkl', 'wb') as f:
+                    pickle.dump({'batch_lrs': batch_lrs, 'epoch_lrs': epoch_lrs}, f)
+                    print("Learning rates saved to 'learning_rates.pkl'")
+
+            # Save checkpoint only from rank 0   
+            
+            if rank == 0:
+                # Always save checkpoint after each epoch
+                checkpoint = {
+                    "epoch": epoch,
+                    "model_state": model.module.state_dict(),
+                    "optimizer_state": optimizer.state_dict(),
+                    "best_val_loss": best_val_loss,
+                    "epochs_without_improvement": epochs_without_improvement,
+                    
+                    "history": history,
+                }
+                torch.save(checkpoint, os.path.join(save_dir, f"checkpoint_epoch_{epoch}.pt"))
+
+
+
+
+            # Early Stopping Logic
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                epochs_without_improvement = 0
+                if rank == 0:
+                    torch.save(checkpoint, os.path.join(save_dir, "best_model.pt"))
+                    print(f"✅ New best model saved at epoch {epoch} with val_loss {val_loss:.5f}")
+
+            else:
+                epochs_without_improvement += 1
+                if rank == 0:
+                    print(f"⚠️ No improvement in validation val_loss. ({epochs_without_improvement}/{patience})")
+
+                if epochs_without_improvement >= patience:
+                    if rank == 0:
+                        print(f"🛑 Rank {rank} - Early stopping triggered after {patience} epochs without improvement.")              
+                    break
+    
+
+        # After training finishes
+        if rank == 0:
+            final_checkpoint = {
+                "epoch": epoch,
+                "model_state": model.module.state_dict(),
+                "optimizer_state": optimizer.state_dict(),
+                "best_val_loss": best_val_loss,
+                "epochs_without_improvement": epochs_without_improvement,
+            }
+            torch.save(final_checkpoint, os.path.join(save_dir, "final_model.pt"))
+            print("🎯 Final model checkpoint saved.")
+            
+        
+        dist.barrier()
+        if rank == 0:
+            torch.save(history, "training_history.pt")
+            plot_history(history)
+
+
+        
+
+    finally:
+        cleanup()    
+
+
+# In[ ]:
+
+
+if __name__ == "__main__":
+    import os
+    import torch
+    import torch.distributed as dist
+
+    # Args
+    args = Args()
+
+    # Resume logic (UNCHANGED)
+    if args.resume_checkpoint is None:
+        latest_checkpoint = get_latest_checkpoint(args.save_dir)
+        if latest_checkpoint:
+            print(f"Resuming from latest checkpoint: {latest_checkpoint}")
+            args.resume_checkpoint = latest_checkpoint
+        else:
+            print("No checkpoint found, starting from scratch.")
+
+    # --- torchrun provides these ---
+    args.rank = int(os.environ["RANK"])
+    args.local_rank = int(os.environ["LOCAL_RANK"])
+    args.world_size = int(os.environ["WORLD_SIZE"])
+
+    # Set device
+    torch.cuda.set_device(args.local_rank)
+
+    # Initialize process group
+    dist.init_process_group(
+        backend="nccl",
+        init_method="env://"
+    )
+
+    # Launch training (single process per GPU)
+    train(args)
+
+  
