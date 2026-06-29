@@ -216,3 +216,23 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+# ==========================
+# PathoBERT
+# ==========================
+
+# Model checkpoints
+Model_checkpoint/
+
+# Test datasets
+Test_data/
+
+# Trained models
+*.pt
+*.pth
+*.ckpt
+
+# Local Hugging Face cache (optional)
+.cache/
+
+# Conda environments (optional)
+.conda/

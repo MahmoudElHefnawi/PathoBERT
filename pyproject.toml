@@ -1,0 +1,89 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pathobert"
+version = "1.0.0"
+description = "Read-level bacterial pathogenicity prediction using DNABERT, LoRA, CNN, MCBAM, and MSCA."
+readme = "README.md"
+requires-python = ">=3.10"
+
+license = { text = "MIT" }
+
+authors = [
+    { name = "Salem A. El-aarag", email = "salem.abdelmonem.stu@gebri.usc.edu.eg" }
+]
+
+maintainers = [
+    { name = "Salem A. El-aarag", email = "salim.alaarag@yahoo.com" }
+]
+
+keywords = [
+    "bioinformatics",
+    "genomics",
+    "DNA",
+    "DNABERT",
+    "bacteria",
+    "pathogenicity",
+    "pathogen detection",
+    "deep learning",
+    "transformers",
+    "PyTorch",
+    "genome classification",
+    "machine learning",
+]
+
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "torch>=2.2,<2.5",
+    "numpy>=1.24,<2.0",
+    "transformers>=4.40,<5.0",
+    "peft>=0.10,<0.14",
+    "pandas>=2.0,<3.0",
+    "matplotlib>=3.7,<4.0",
+    "tqdm>=4.66,<5.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/salimalaarag/PathoBERT"
+Repository = "https://github.com/salimalaarag/PathoBERT"
+Documentation = "https://github.com/salimalaarag/PathoBERT#readme"
+Issues = "https://github.com/salimalaarag/PathoBERT/issues"
+
+[project.scripts]
+pathobert = "pathobert.cli:main"
+
+[project.optional-dependencies]
+dev = [
+    "build>=1.2",
+    "twine>=5.0",
+    "pytest>=8.0",
+    "black>=24.0",
+    "ruff>=0.5",
+]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pathobert*"]
+
+
